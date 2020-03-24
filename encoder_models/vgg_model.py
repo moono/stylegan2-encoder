@@ -8,12 +8,12 @@ from stylegan2.utils import adjust_dynamic_range
 
 
 class EncoderModel(tf.keras.Model):
-    def __init__(self, resolutions, featuremaps, vgg16_layer_names, image_size, **kwargs):
+    def __init__(self, resolutions, featuremaps, image_size, vgg16_layer_names, **kwargs):
         super(EncoderModel, self).__init__(**kwargs)
         self.resolutions = resolutions
         self.featuremaps = featuremaps
-        self.vgg16_layer_names = vgg16_layer_names
         self.image_size = image_size
+        self.vgg16_layer_names = vgg16_layer_names
 
         self.synthesis = Synthesis(self.resolutions, self.featuremaps, name='g_synthesis')
         self.perceptual_model = self.load_perceptual_network()
@@ -39,12 +39,12 @@ class EncoderModel(tf.keras.Model):
 
         n_synthesis_weights = 0
         successful_copies = 0
-        for cw in self.trainable_weights:
+        for cw in self.weights:
             if 'g_synthesis' in cw.name:
                 n_synthesis_weights += 1
 
                 cw_name = split_first_name(cw.name)
-                for sw in src_net.trainable_weights:
+                for sw in src_net.weights:
                     sw_name = split_first_name(sw.name)
                     if cw_name == sw_name:
                         assert sw.shape == cw.shape

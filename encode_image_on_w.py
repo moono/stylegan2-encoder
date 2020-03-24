@@ -21,7 +21,6 @@ class EncodeImage(object):
         self.output_dir = params['output_dir']
         self.results_on_tensorboard = params['results_on_tensorboard']
         self.output_name_prefix = ''
-        self.w_dim = 512
         self.save_every = 100
         self.n_w_samples_to_draw = 10000
         self.run_encoder = False
@@ -187,8 +186,8 @@ class EncodeImage(object):
 
         # lets restore with optimized embeddings
         final_image = self.encoder_model.run_synthesis_model(self.w)
-        self.save_image(final_image, out_fn=os.path.join(self.output_dir,
-                                                         '{}_final_encoded.png'.format(self.output_name_prefix)))
+        self.save_image(final_image,
+                        out_fn=os.path.join(self.output_dir, '{}_final_encoded.png'.format(self.output_name_prefix)))
         np.save(os.path.join(self.output_dir, '{}_final_encoded.npy'.format(self.output_name_prefix)), self.w.numpy())
         return
 
@@ -223,8 +222,8 @@ def main():
     target_images = glob.glob(os.path.join('/home/mookyung/Downloads/labeledAll', '*.png'))
     target_images = sorted(target_images)
     target_images = target_images[:10]
-    image_encoder = EncodeImage(encode_params)
 
+    image_encoder = EncodeImage(encode_params)
     for image_fn in target_images:
         image_encoder.set_target_image(image_fn)
         image_encoder.encode_image()
