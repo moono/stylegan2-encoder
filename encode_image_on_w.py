@@ -263,7 +263,7 @@ def main():
     abs_path = os.path.dirname(os.path.abspath(__file__))
     encode_params = {
         'image_size': 256,
-        'generator_ckpt_dir': os.path.join(abs_path, './official-converted'),
+        'generator_ckpt_dir': os.path.join(abs_path, './stylegan2/official-converted'),
         'lpips_ckpt_dir': os.path.join(abs_path, 'encoder_models'),
         'output_dir': os.path.join(abs_path, './encode_results', 'on_w'),
         'results_on_tensorboard': False,
@@ -275,7 +275,7 @@ def main():
     }
 
     image_encoder = EncodeImage(encode_params)
-    image_encoder.set_target_image(os.path.join(abs_path, './00011.png'))
+    image_encoder.set_target_image(os.path.join(abs_path, './test_images/00011.png'))
     image_encoder.encode_image()
     return
 
