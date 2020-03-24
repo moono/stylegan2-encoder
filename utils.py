@@ -1,6 +1,10 @@
+# import numpy as np
 import tensorflow as tf
 
+# from PIL import Image
 
+
+# tensorflow related
 def allow_memory_growth():
     gpus = tf.config.experimental.list_physical_devices('GPU')
     if gpus:
