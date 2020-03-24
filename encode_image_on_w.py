@@ -6,7 +6,7 @@ from PIL import Image
 from utils import allow_memory_growth
 from stylegan2.generator import Generator
 from stylegan2.utils import adjust_dynamic_range
-from encoder_models.encoder_model import EncoderModel
+from encoder_models.lpips_model import EncoderModel
 
 
 class EncodeImage(object):
