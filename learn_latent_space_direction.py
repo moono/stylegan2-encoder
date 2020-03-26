@@ -112,10 +112,10 @@ def load_generator(generator_ckpt_dir):
     return generator
 
 
-def generate_image_with_w(generator, w, draw_bounding_box=False):
+def generate_image_with_w(generator, w, truncation_psi, draw_bounding_box=False):
     w = np.reshape(w, newshape=(1, -1))
     w_broadcasted = generator.broadcast(w)
-    w_broadcasted = generator.truncation_trick(w_broadcasted, truncation_cutoff=None, truncation_psi=0.5)   # need check
+    w_broadcasted = generator.truncation_trick(w_broadcasted, truncation_psi=truncation_psi)   # need check
     fake_image = generator.synthesis(w_broadcasted)
     fake_image = adjust_dynamic_range(fake_image, range_in=(-1.0, 1.0), range_out=(0.0, 255.0),
                                       out_dtype=tf.dtypes.float32)
@@ -134,18 +134,18 @@ def generate_image_with_w(generator, w, draw_bounding_box=False):
     return fake_image
 
 
-def move_n_show(g, latent_vector, direction, coeffs):
-    fig, ax = plt.subplots(1, len(coeffs), figsize=(15, 10), dpi=80)
-    for ii, coeff in enumerate(coeffs):
+def move_n_show(g, latent_vector, direction, coefficients, truncation_psi):
+    fig, ax = plt.subplots(1, len(coefficients), figsize=(15, 10), dpi=80)
+    for ii, coeff in enumerate(coefficients):
         new_latent_vector = latent_vector + coeff * direction
-        ax[ii].imshow(generate_image_with_w(g, new_latent_vector))
+        ax[ii].imshow(generate_image_with_w(g, new_latent_vector, truncation_psi))
         ax[ii].set_title('Coeff: {:.1f}'.format(coeff))
     [x.axis('off') for x in ax]
     plt.show()
     return
 
 
-def move_n_save(g, latent_vector, direction, coefficients, output_fn):
+def move_n_save(g, latent_vector, direction, coefficients, truncation_psi, output_fn):
     # replace a value if needed
     if 0.0 not in coefficients.tolist():
         loc = (np.abs(coefficients - 0.0)).argmin()
@@ -163,7 +163,7 @@ def move_n_save(g, latent_vector, direction, coefficients, output_fn):
             draw_bounding_box = True if coeff == 0.0 else False
 
             new_latent_vector = latent_vector + coeff * direction
-            image = generate_image_with_w(g, new_latent_vector, draw_bounding_box=draw_bounding_box)
+            image = generate_image_with_w(g, new_latent_vector, truncation_psi, draw_bounding_box)
             image = np.asarray(image)
 
             canvas[y_start:y_end, x_start:x_end, :] = image
@@ -188,6 +188,7 @@ def main():
     # try to move to attractive direction
     output_dir = './latent_direction_result'
     n_samples = 5
+    truncation_psi = 0.5
     start, stop, num = -5.0, 5.0, 21
     # start, stop, num = -2.0, 1.0, 21
     coefficients = np.linspace(start=start, stop=stop, num=num, dtype=np.float32)
@@ -195,12 +196,12 @@ def main():
     # most attractive data
     for ii, latent_vector in enumerate(x_data[:n_samples]):
         output_fn = os.path.join(output_dir, 'most_attractive_{}_{}_{}.png'.format(start, stop, ii))
-        move_n_save(generator, latent_vector, attractive_direction, coefficients, output_fn)
+        move_n_save(generator, latent_vector, attractive_direction, coefficients, truncation_psi, output_fn)
 
     # least attractive data
     for ii, latent_vector in enumerate(x_data[-n_samples:]):
         output_fn = os.path.join(output_dir, 'least_attractive_{}_{}_{}.png'.format(start, stop, ii))
-        move_n_save(generator, latent_vector, attractive_direction, coefficients, output_fn)
+        move_n_save(generator, latent_vector, attractive_direction, coefficients, truncation_psi, output_fn)
     return
 
 
