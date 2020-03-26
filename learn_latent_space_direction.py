@@ -115,7 +115,7 @@ def load_generator(generator_ckpt_dir):
 def generate_image_with_w(generator, w, truncation_psi, draw_bounding_box=False):
     w = np.reshape(w, newshape=(1, -1))
     w_broadcasted = generator.broadcast(w)
-    w_broadcasted = generator.truncation_trick(w_broadcasted, truncation_psi=truncation_psi)   # need check
+    w_broadcasted = generator.truncation_trick(w_broadcasted, truncation_cutoff=None, truncation_psi=truncation_psi)   # needs check
     fake_image = generator.synthesis(w_broadcasted)
     fake_image = adjust_dynamic_range(fake_image, range_in=(-1.0, 1.0), range_out=(0.0, 255.0),
                                       out_dtype=tf.dtypes.float32)

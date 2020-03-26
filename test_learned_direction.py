@@ -52,8 +52,8 @@ def preprocess_image(src_file):
 def main():
     allow_memory_growth()
 
-    # src_file = './test_images/raw/iu-01.jpg'
-    src_file = './test_images/raw/irene-01.jpeg'
+    src_file = './test_images/raw/iu-01.jpg'
+    # src_file = './test_images/raw/irene-01.jpeg'
     latent_vector = preprocess_image(src_file)
 
     # load saved learned direction
@@ -65,11 +65,11 @@ def main():
     # try to move to attractive direction
     print('move to specified direction...')
     output_dir = './test_images/latent_space_moved'
-    truncation_psi = 0.5
+    truncation_psi = 0.7
     start, stop, num = -5.0, 5.0, 21
     # start, stop, num = -2.0, 1.0, 21
     coefficients = np.linspace(start=start, stop=stop, num=num, dtype=np.float32)
-    output_fn = os.path.join(output_dir, '{}_{}_{}.png'.format(os.path.basename(src_file), start, stop))
+    output_fn = os.path.join(output_dir, '{}_{}_{}_psi-{}.png'.format(os.path.basename(src_file), start, stop, truncation_psi))
     move_n_save(generator, latent_vector, latent_direction, coefficients, truncation_psi, output_fn)
     return
 
