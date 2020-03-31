@@ -18,3 +18,12 @@ def allow_memory_growth():
             # Memory growth must be set before GPUs have been initialized
             print(e)
     return
+
+
+def adjust_dynamic_range(images, range_in, range_out, out_dtype):
+    scale = (range_out[1] - range_out[0]) / (range_in[1] - range_in[0])
+    bias = range_out[0] - range_in[0] * scale
+    images = images * scale + bias
+    images = tf.clip_by_value(images, range_out[0], range_out[1])
+    images = tf.cast(images, dtype=out_dtype)
+    return images

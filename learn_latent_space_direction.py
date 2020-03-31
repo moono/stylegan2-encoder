@@ -2,9 +2,9 @@
 # ref: https://www.reddit.com/r/MachineLearning/comments/aq6jxf/p_stylegan_encoder_from_real_images_to_latent/
 import os
 import glob
+import argparse
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
 
 from PIL import Image, ImageDraw
 from sklearn.preprocessing import StandardScaler
@@ -16,7 +16,7 @@ from stylegan2.generator import Generator
 from stylegan2.utils import adjust_dynamic_range
 
 
-def load_n_merge_encoded_data(encoded_result_dir):
+def load_n_merge_encoded_data(data0_dir, data1_dir):
     def check_nan(list_of_npys):
         n_nans = 0
         good_data = list()
@@ -36,29 +36,37 @@ def load_n_merge_encoded_data(encoded_result_dir):
         good_data = np.concatenate(good_data, axis=0)
         return good_data
 
-    most_attractive = glob.glob(os.path.join(encoded_result_dir, 'most_attractive', '*.npy'))
-    least_attractive = glob.glob(os.path.join(encoded_result_dir, 'least_attractive', '*.npy'))
-    assert len(most_attractive) == len(least_attractive)
+    # load all encoded data
+    data0 = glob.glob(os.path.join(data0_dir, '*.npy'))
+    data1 = glob.glob(os.path.join(data1_dir, '*.npy'))
+    data0 = sorted(data0)
+    data1 = sorted(data1)
 
-    most_attractive = sorted(most_attractive)
-    least_attractive = sorted(least_attractive)
-    most_attractive_data = check_nan(most_attractive)
-    least_attractive_data = check_nan(least_attractive)
-    x_data = np.concatenate((most_attractive_data, least_attractive_data), axis=0)
+    # remove nan value latent vectors
+    data0 = check_nan(data0)
+    data1 = check_nan(data1)
 
-    y_label1 = np.ones(shape=(most_attractive_data.shape[0],), dtype=np.int32)
-    y_label0 = np.zeros(shape=(least_attractive_data.shape[0],), dtype=np.int32)
-    y_label = np.concatenate((y_label1, y_label0), axis=0)
+    # create corresponding labels
+    label1 = np.ones(shape=(data1.shape[0],), dtype=np.int32)
+    label0 = np.zeros(shape=(data0.shape[0],), dtype=np.int32)
 
-    print('n_most_attractive_data: {}'.format(most_attractive_data.shape[0]))
-    print('n_least_attractive_data: {}'.format(least_attractive_data.shape[0]))
+    # merge data into x, y
+    x_data = np.concatenate((data1, data0), axis=0)
+    y_label = np.concatenate((label1, label0), axis=0)
+
+    print('n_data0: {}'.format(data0.shape[0]))
+    print('n_data1: {}'.format(data1.shape[0]))
     return x_data, y_label
 
 
 def try_score_on_splitted_data(x_data, y_label):
     train_features, test_features, train_labels, test_labels = train_test_split(x_data, y_label)
-    print('n_train: {}, n_test: {}'.format(train_features.shape[0], test_features.shape[0]))
+    n_train, n_test = train_features.shape[0], test_features.shape[0]
+    print('n_train: {}, n_test: {}'.format(n_train, n_test))
 
+    # normalize data
+    train_features = np.reshape(train_features, newshape=(n_train, -1))
+    test_features = np.reshape(test_features, newshape=(n_test, -1))
     scaler = StandardScaler()
     train_features = scaler.fit_transform(train_features)
     test_features = scaler.transform(test_features)
@@ -70,17 +78,21 @@ def try_score_on_splitted_data(x_data, y_label):
 
 
 def learn_direction(x_data, y_label):
+    n_data = x_data.shape[0]
     w_dim = x_data.shape[-1]
 
+    # check train / test split score
     try_score_on_splitted_data(x_data, y_label)
 
+    # run on all data
+    x_features = np.reshape(x_data, newshape=(n_data, -1))
     scaler = StandardScaler()
-    x_features = scaler.fit_transform(x_data)
+    x_features = scaler.fit_transform(x_features)
 
     model = LogisticRegression(class_weight='balanced').fit(x_features, y_label)
     print('All score: {}'.format(model.score(x_features, y_label)))
-    attractive_direction = model.coef_.reshape((w_dim,))
-    return attractive_direction
+    direction_vector = model.coef_.reshape((-1, w_dim))
+    return direction_vector
 
 
 def load_generator(generator_ckpt_dir):
@@ -112,10 +124,15 @@ def load_generator(generator_ckpt_dir):
     return generator
 
 
-def generate_image_with_w(generator, w, truncation_psi, draw_bounding_box=False):
-    w = np.reshape(w, newshape=(1, -1))
-    w_broadcasted = generator.broadcast(w)
-    w_broadcasted = generator.truncation_trick(w_broadcasted, truncation_cutoff=None, truncation_psi=truncation_psi)   # needs check
+def generate_image(generator, is_on_w, x, truncation_psi, draw_bounding_box):
+    if is_on_w:
+        w = np.reshape(x, newshape=(1, -1))
+        w_broadcasted = generator.broadcast(w)
+        w_broadcasted = generator.truncation_trick(w_broadcasted, truncation_cutoff=None,
+                                                   truncation_psi=truncation_psi)  # needs check
+    else:
+        w_broadcasted = np.reshape(x, newshape=(1, -1, generator.w_dim))
+
     fake_image = generator.synthesis(w_broadcasted)
     fake_image = adjust_dynamic_range(fake_image, range_in=(-1.0, 1.0), range_out=(0.0, 255.0),
                                       out_dtype=tf.dtypes.float32)
@@ -134,18 +151,15 @@ def generate_image_with_w(generator, w, truncation_psi, draw_bounding_box=False)
     return fake_image
 
 
-def move_n_show(g, latent_vector, direction, coefficients, truncation_psi):
-    fig, ax = plt.subplots(1, len(coefficients), figsize=(15, 10), dpi=80)
-    for ii, coeff in enumerate(coefficients):
-        new_latent_vector = latent_vector + coeff * direction
-        ax[ii].imshow(generate_image_with_w(g, new_latent_vector, truncation_psi))
-        ax[ii].set_title('Coeff: {:.1f}'.format(coeff))
-    [x.axis('off') for x in ax]
-    plt.show()
-    return
+def move_n_save(g, latent_vector, direction_vector, is_on_w, coefficients, truncation_psi, output_fn):
+    assert latent_vector.shape == direction_vector.shape
+    if is_on_w and not isinstance(truncation_psi, float):
+        raise ValueError('Need proper truncation psi value!!')
 
+    # flatten input vectors
+    latent_vector = np.reshape(latent_vector, newshape=(-1,))
+    direction_vector = np.reshape(direction_vector, newshape=(-1,))
 
-def move_n_save(g, latent_vector, direction, coefficients, truncation_psi, output_fn):
     # replace a value if needed
     if 0.0 not in coefficients.tolist():
         loc = (np.abs(coefficients - 0.0)).argmin()
@@ -162,8 +176,8 @@ def move_n_save(g, latent_vector, direction, coefficients, truncation_psi, outpu
             coeff = coefficients[index]
             draw_bounding_box = True if coeff == 0.0 else False
 
-            new_latent_vector = latent_vector + coeff * direction
-            image = generate_image_with_w(g, new_latent_vector, truncation_psi, draw_bounding_box)
+            new_latent_vector = latent_vector + coeff * direction_vector
+            image = generate_image(g, is_on_w, new_latent_vector, truncation_psi, draw_bounding_box)
             image = np.asarray(image)
 
             canvas[y_start:y_end, x_start:x_end, :] = image
@@ -174,34 +188,51 @@ def move_n_save(g, latent_vector, direction, coefficients, truncation_psi, outpu
 
 
 def main():
-    # find attractive direction vector
-    encoded_result_dir = '/home/mookyung/Downloads/encoded_result'
-    x_data, y_label = load_n_merge_encoded_data(encoded_result_dir)
-    attractive_direction = learn_direction(x_data, y_label)
-    np.save(os.path.join('./learned_directions', 'attractive_direction.npy'), attractive_direction)
-    print()
+    # global program arguments parser
+    parser = argparse.ArgumentParser(description='')
+    parser.add_argument('--allow_memory_growth', default='TRUE', type=str)
+    parser.add_argument('--data0_dir', default='./outputs/encoded_data0', type=str)
+    parser.add_argument('--data1_dir', default='./outputs/encoded_data0', type=str)
+    parser.add_argument('--output_base_dir', default='./outputs', type=str)
+    parser.add_argument('--n_samples', default=5, type=int)
+    parser.add_argument('--coeff_start', default=-5, type=int)
+    parser.add_argument('--coeff_end', default=5, type=int)
+    parser.add_argument('--coeff_num', default=7, type=int)
+    parser.add_argument('--truncation_psi', default=1.0, type=float)
+    parser.add_argument('--is_on_w', default='FALSE', type=str)
+    args = vars(parser.parse_args())
+
+    if args['allow_memory_growth'] == 'TRUE':
+        allow_memory_growth()
+
+    # find direction vector
+    x_data, y_label = load_n_merge_encoded_data(args['data0_dir'], args['data1_dir'])
+    direction_vector = learn_direction(x_data, y_label)
+    np.save(os.path.join(args['output_base_dir'], 'direction_vector.npy'), direction_vector)
 
     # load generator for testing
-    allow_memory_growth()
     generator = load_generator(generator_ckpt_dir='./stylegan2/official-converted')
 
-    # try to move to attractive direction
-    output_dir = './latent_direction_result'
-    n_samples = 5
-    truncation_psi = 0.5
-    start, stop, num = -5.0, 5.0, 21
-    # start, stop, num = -2.0, 1.0, 21
+    # try to move input latent vector with direction vector
+    output_dir = os.path.join(args['output_base_dir'], 'direction_walk')
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    is_on_w = True if args['is_on_w'] == 'TRUE' else False
+    n_samples = args['n_samples']
+    truncation_psi = args['truncation_psi']
+    start, stop, num = args['coeff_start'], args['coeff_end'], args['coeff_num']
     coefficients = np.linspace(start=start, stop=stop, num=num, dtype=np.float32)
 
-    # most attractive data
+    # data1
     for ii, latent_vector in enumerate(x_data[:n_samples]):
-        output_fn = os.path.join(output_dir, 'most_attractive_{}_{}_{}.png'.format(start, stop, ii))
-        move_n_save(generator, latent_vector, attractive_direction, coefficients, truncation_psi, output_fn)
+        output_fn = os.path.join(output_dir, 'data1_{}_{}_{}.png'.format(start, stop, ii))
+        move_n_save(generator, latent_vector, direction_vector, is_on_w, coefficients, truncation_psi, output_fn)
 
-    # least attractive data
+    # data0
     for ii, latent_vector in enumerate(x_data[-n_samples:]):
-        output_fn = os.path.join(output_dir, 'least_attractive_{}_{}_{}.png'.format(start, stop, ii))
-        move_n_save(generator, latent_vector, attractive_direction, coefficients, truncation_psi, output_fn)
+        output_fn = os.path.join(output_dir, 'data0_{}_{}_{}.png'.format(start, stop, ii))
+        move_n_save(generator, latent_vector, direction_vector, is_on_w, coefficients, truncation_psi, output_fn)
     return
 
 

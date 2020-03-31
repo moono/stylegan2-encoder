@@ -1,39 +1,42 @@
 import os
 import glob
+import argparse
 import numpy as np
 import tensorflow as tf
 
 from utils import allow_memory_growth
 from learn_latent_space_direction import load_generator, move_n_save
-# from stylegan2.generator import Generator
-# from stylegan2.utils import adjust_dynamic_range
 from align_images import compute_facial_landmarks, image_align
-from encode_image_on_w import EncodeImage
+# from encode_image_on_w import EncodeImage
+from image_encoder import encode_image
 
 
-def encode_image(image_fn):
-    encode_params = {
-        'image_size': 256,
-        'generator_ckpt_dir': './stylegan2/official-converted',
-        'lpips_ckpt_dir': './encoder_models',
-        'output_dir': './test_images/encoded',
-        'results_on_tensorboard': False,
-        'learning_rate': 0.01,
-        'n_train_step': 1000,
-    }
-    image_encoder = EncodeImage(encode_params)
-    image_encoder.set_target_image(image_fn)
-    image_encoder.encode_image()
+# def encode_image(image_fn):
+#     encode_params = {
+#         'image_size': 256,
+#         'generator_ckpt_dir': './stylegan2/official-converted',
+#         'lpips_ckpt_dir': './encoder_models',
+#         'output_dir': './test_images/encoded',
+#         'results_on_tensorboard': False,
+#         'learning_rate': 0.01,
+#         'n_train_step': 1000,
+#     }
+#     image_encoder = EncodeImage(encode_params)
+#     image_encoder.set_target_image(image_fn)
+#     image_encoder.encode_image()
+#
+#     npy_fn = os.path.join(image_encoder.output_dir, '{}_final_encoded.npy'.format(image_encoder.output_name_prefix))
+#     return npy_fn
 
-    npy_fn = os.path.join(image_encoder.output_dir, '{}_final_encoded.npy'.format(image_encoder.output_name_prefix))
-    return npy_fn
 
-
-def preprocess_image(src_file):
+def preprocess_image(src_file, output_base_dir, is_on_w):
     # set path
     fn_only = os.path.basename(src_file)
     fn_only_only = fn_only.split('.')[0]
-    dst_file = os.path.join('./test_images/aligned', '{}.png'.format(fn_only_only))
+    output_dir = os.path.join(output_base_dir, 'aligned')
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    dst_file = os.path.join(output_dir, '{}.png'.format(fn_only_only))
 
     # check if exists
     print('preprocess...align face')
@@ -44,33 +47,54 @@ def preprocess_image(src_file):
         image_align(src_file, dst_file, face_landmarks, output_size=1024, transform_size=4096, enable_padding=True)
 
     print('preprocess...encode aligned image')
-    latent_vector_file = encode_image(dst_file)
+    latent_vector_file = encode_image(dst_file, output_base_dir, is_on_w, results_on_tensorboard=False)
     latent_vector = np.load(latent_vector_file)
     return latent_vector
 
 
 def main():
-    allow_memory_growth()
+    # global program arguments parser
+    parser = argparse.ArgumentParser(description='')
+    parser.add_argument('--allow_memory_growth', default='TRUE', type=str)
+    parser.add_argument('--src_file', default='./test_images/iu-01.jpg', type=str)
+    parser.add_argument('--data1_dir', default='./outputs/encoded_data0', type=str)
+    parser.add_argument('--output_base_dir', default='./outputs', type=str)
+    parser.add_argument('--direction_vector_fn', default='./outputs/attractive_direction_on_w_plus.npy', type=str)
+    parser.add_argument('--coeff_start', default=-5, type=int)
+    parser.add_argument('--coeff_end', default=5, type=int)
+    parser.add_argument('--coeff_num', default=7, type=int)
+    parser.add_argument('--truncation_psi', default=1.0, type=float)
+    parser.add_argument('--is_on_w', default='FALSE', type=str)
+    args = vars(parser.parse_args())
 
-    src_file = './test_images/raw/iu-01.jpg'
-    # src_file = './test_images/raw/irene-01.jpeg'
-    latent_vector = preprocess_image(src_file)
+    if args['allow_memory_growth'] == 'TRUE':
+        allow_memory_growth()
+
+    # compute latent vector from input image
+    src_file = args['src_file']
+    output_base_dir = args['output_base_dir']
+    is_on_w = True if args['is_on_w'] == 'TRUE' else False
+    latent_vector = preprocess_image(src_file, output_base_dir, is_on_w)
 
     # load saved learned direction
-    latent_direction = np.load(os.path.join('./learned_directions', 'attractive_direction.npy'))
+    direction_vector = np.load(args['direction_vector_fn'])
 
     # load generator for testing
     generator = load_generator(generator_ckpt_dir='./stylegan2/official-converted')
 
-    # try to move to attractive direction
+    # try to move to direction
     print('move to specified direction...')
-    output_dir = './test_images/latent_space_moved'
-    truncation_psi = 0.7
-    start, stop, num = -5.0, 5.0, 21
-    # start, stop, num = -2.0, 1.0, 21
+    truncation_psi = args['truncation_psi']
+    start, stop, num = args['coeff_start'], args['coeff_end'], args['coeff_num']
     coefficients = np.linspace(start=start, stop=stop, num=num, dtype=np.float32)
-    output_fn = os.path.join(output_dir, '{}_{}_{}_psi-{}.png'.format(os.path.basename(src_file), start, stop, truncation_psi))
-    move_n_save(generator, latent_vector, latent_direction, coefficients, truncation_psi, output_fn)
+
+    if truncation_psi is None:
+        output_fn = os.path.join(output_base_dir, '{}_{}_{}.png'.format(os.path.basename(src_file),
+                                                                        start, stop))
+    else:
+        output_fn = os.path.join(output_base_dir, '{}_{}_{}_psi-{}.png'.format(os.path.basename(src_file),
+                                                                               start, stop, truncation_psi))
+    move_n_save(generator, latent_vector, direction_vector, is_on_w, coefficients, truncation_psi, output_fn)
     return
 
 
