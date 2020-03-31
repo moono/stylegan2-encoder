@@ -1,32 +1,11 @@
 import os
-import glob
 import argparse
 import numpy as np
-import tensorflow as tf
 
 from utils import allow_memory_growth
 from learn_latent_space_direction import load_generator, move_n_save
 from align_images import compute_facial_landmarks, image_align
-# from encode_image_on_w import EncodeImage
 from image_encoder import encode_image
-
-
-# def encode_image(image_fn):
-#     encode_params = {
-#         'image_size': 256,
-#         'generator_ckpt_dir': './stylegan2/official-converted',
-#         'lpips_ckpt_dir': './encoder_models',
-#         'output_dir': './test_images/encoded',
-#         'results_on_tensorboard': False,
-#         'learning_rate': 0.01,
-#         'n_train_step': 1000,
-#     }
-#     image_encoder = EncodeImage(encode_params)
-#     image_encoder.set_target_image(image_fn)
-#     image_encoder.encode_image()
-#
-#     npy_fn = os.path.join(image_encoder.output_dir, '{}_final_encoded.npy'.format(image_encoder.output_name_prefix))
-#     return npy_fn
 
 
 def preprocess_image(src_file, output_base_dir, is_on_w):
