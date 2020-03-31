@@ -229,7 +229,10 @@ def encode_image(input_image_fn, output_dir, is_on_w, results_on_tensorboard):
     image_encoder = ImageEncoder(encode_params)
     image_encoder.set_target_image(input_image_fn)
     image_encoder.encode_image()
-    return
+
+    result_fn = os.path.join(image_encoder.output_dir,
+                             image_encoder.output_template_npy.format(image_encoder.output_name_prefix))
+    return result_fn
 
 
 def batch_encode_images(input_images_dir, output_dir, is_on_w, results_on_tensorboard):

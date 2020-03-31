@@ -49,6 +49,7 @@ def preprocess_image(src_file, output_base_dir, is_on_w):
     print('preprocess...encode aligned image')
     latent_vector_file = encode_image(dst_file, output_base_dir, is_on_w, results_on_tensorboard=False)
     latent_vector = np.load(latent_vector_file)
+    latent_vector = np.squeeze(latent_vector, axis=0)
     return latent_vector
 
 
@@ -57,7 +58,6 @@ def main():
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--allow_memory_growth', default='TRUE', type=str)
     parser.add_argument('--src_file', default='./test_images/iu-01.jpg', type=str)
-    parser.add_argument('--data1_dir', default='./outputs/encoded_data0', type=str)
     parser.add_argument('--output_base_dir', default='./outputs', type=str)
     parser.add_argument('--direction_vector_fn', default='./outputs/attractive_direction_on_w_plus.npy', type=str)
     parser.add_argument('--coeff_start', default=-5, type=int)
@@ -88,7 +88,7 @@ def main():
     start, stop, num = args['coeff_start'], args['coeff_end'], args['coeff_num']
     coefficients = np.linspace(start=start, stop=stop, num=num, dtype=np.float32)
 
-    if truncation_psi is None:
+    if truncation_psi is None or not is_on_w:
         output_fn = os.path.join(output_base_dir, '{}_{}_{}.png'.format(os.path.basename(src_file),
                                                                         start, stop))
     else:
