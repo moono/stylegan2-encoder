@@ -214,14 +214,14 @@ class ImageEncoder(object):
         return
 
 
-def encode_image(input_image_fn, output_dir, is_on_w, results_on_tensorboard):
+def encode_image(input_image_fn, output_dir, is_on_w, generator_ckpt_dir, lpips_ckpt_dir, results_on_tensorboard):
     encode_params = {
         'is_on_w': is_on_w,
         'image_size': 256,
         'learning_rate': 0.01,
         'n_train_step': 1000,
-        'generator_ckpt_dir': './stylegan2/official-converted',
-        'lpips_ckpt_dir': './lpips',
+        'generator_ckpt_dir': generator_ckpt_dir,
+        'lpips_ckpt_dir': lpips_ckpt_dir,
         'output_dir': output_dir,
         'results_on_tensorboard': results_on_tensorboard,
     }
@@ -235,14 +235,14 @@ def encode_image(input_image_fn, output_dir, is_on_w, results_on_tensorboard):
     return result_fn
 
 
-def batch_encode_images(input_images_dir, output_dir, is_on_w, results_on_tensorboard):
+def batch_encode_images(input_images_dir, output_dir, is_on_w, generator_ckpt_dir, lpips_ckpt_dir, results_on_tensorboard):
     encode_params = {
         'is_on_w': is_on_w,
         'image_size': 256,
         'learning_rate': 0.01,
         'n_train_step': 1000,
-        'generator_ckpt_dir': './stylegan2/official-converted',
-        'lpips_ckpt_dir': './lpips',
+        'generator_ckpt_dir': generator_ckpt_dir,
+        'lpips_ckpt_dir': lpips_ckpt_dir,
         'output_dir': output_dir,
         'results_on_tensorboard': results_on_tensorboard,
     }
@@ -263,6 +263,8 @@ def main():
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--allow_memory_growth', default='TRUE', type=str)
     parser.add_argument('--input_images_dir', default='/home/mookyung/Downloads/labeledAll', type=str)
+    parser.add_argument('--generator_ckpt_dir', default='./stylegan2/official-converted', type=str)
+    parser.add_argument('--lpips_ckpt_dir', default='./lpips', type=str)
     parser.add_argument('--output_base_dir', default='./outputs', type=str)
     parser.add_argument('--is_on_w', default='TRUE', type=str)
     parser.add_argument('--results_on_tensorboard', default='TRUE', type=str)
@@ -272,10 +274,12 @@ def main():
         allow_memory_growth()
 
     input_images_dir = args['input_images_dir']
+    generator_ckpt_dir = args['generator_ckpt_dir']
+    lpips_ckpt_dir = args['lpips_ckpt_dir']
     output_base_dir = args['output_base_dir']
     is_on_w = True if args['is_on_w'] == 'TRUE' else False
     results_on_tensorboard = True if args['results_on_tensorboard'] == 'TRUE' else False
-    batch_encode_images(input_images_dir, output_base_dir, is_on_w, results_on_tensorboard)
+    batch_encode_images(input_images_dir, output_base_dir, is_on_w, generator_ckpt_dir, lpips_ckpt_dir, results_on_tensorboard)
     return
 
 
