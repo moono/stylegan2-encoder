@@ -1,5 +1,6 @@
 import os
 import glob
+import time
 import argparse
 import numpy as np
 import tensorflow as tf
@@ -144,6 +145,7 @@ class ImageEncoder(object):
 
         return encoder_model, initial_var, sample_image
 
+    @tf.function
     def set_target_image(self, image_fn):
         self.output_name_prefix = os.path.basename(image_fn)
 
@@ -156,9 +158,12 @@ class ImageEncoder(object):
             # reset target image & output name
             self.target_image.assign(self.load_image(image_fn, self.image_size))
 
-            # reset optimizer state
-            for v in self.optimizer.variables():
-                v.assign(tf.zeros_like(v))
+            # reset optimizer state ==> Not Working???!!!
+            for w in self.optimizer.weights:
+                w.assign(tf.zeros_like(w))
+
+            # # reset optimizer (remove @tf.function decorator in step() function) ==> too slow
+            # self.optimizer = tf.keras.optimizers.Adam(self.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-8)
 
             # reset w too
             self.x.assign(self.initial_x)
@@ -220,18 +225,7 @@ class ImageEncoder(object):
         return
 
 
-def encode_image(input_image_fn, output_dir, is_on_w, generator_ckpt_dir, lpips_ckpt_dir, results_on_tensorboard):
-    encode_params = {
-        'is_on_w': is_on_w,
-        'image_size': 256,
-        'learning_rate': 0.01,
-        'n_train_step': 1000,
-        'generator_ckpt_dir': generator_ckpt_dir,
-        'lpips_ckpt_dir': lpips_ckpt_dir,
-        'output_dir': output_dir,
-        'results_on_tensorboard': results_on_tensorboard,
-    }
-
+def encode_image(input_image_fn, encode_params):
     image_encoder = ImageEncoder(encode_params)
     image_encoder.set_target_image(input_image_fn)
     image_encoder.encode_image()
@@ -241,26 +235,18 @@ def encode_image(input_image_fn, output_dir, is_on_w, generator_ckpt_dir, lpips_
     return result_fn
 
 
-def batch_encode_images(input_images_dir, output_dir, is_on_w, generator_ckpt_dir, lpips_ckpt_dir, results_on_tensorboard):
-    encode_params = {
-        'is_on_w': is_on_w,
-        'image_size': 256,
-        'learning_rate': 0.01,
-        'n_train_step': 1000,
-        'generator_ckpt_dir': generator_ckpt_dir,
-        'lpips_ckpt_dir': lpips_ckpt_dir,
-        'output_dir': output_dir,
-        'results_on_tensorboard': results_on_tensorboard,
-    }
-
+def batch_encode_images(input_images_dir, encode_params):
     target_images = glob.glob(os.path.join(input_images_dir, '*.png'))
     target_images = sorted(target_images)
     # target_images = target_images[:3]
 
     image_encoder = ImageEncoder(encode_params)
-    for image_fn in target_images:
-        image_encoder.set_target_image(image_fn)
+    for input_image_fn in target_images:
+        t_start = time.time()
+        image_encoder.set_target_image(input_image_fn)
         image_encoder.encode_image()
+        elapsed = time.time() - t_start
+        print('Elapsed: {:.3f}s'.format(elapsed))
     return
 
 
@@ -285,7 +271,19 @@ def main():
     output_base_dir = args['output_base_dir']
     is_on_w = True if args['is_on_w'] == 'TRUE' else False
     results_on_tensorboard = True if args['results_on_tensorboard'] == 'TRUE' else False
-    batch_encode_images(input_images_dir, output_base_dir, is_on_w, generator_ckpt_dir, lpips_ckpt_dir, results_on_tensorboard)
+
+    encode_params = {
+        'is_on_w': is_on_w,
+        'image_size': 256,
+        'learning_rate': 0.01,
+        'n_train_step': 1000,
+        'generator_ckpt_dir': generator_ckpt_dir,
+        'lpips_ckpt_dir': lpips_ckpt_dir,
+        'output_dir': output_base_dir,
+        'results_on_tensorboard': results_on_tensorboard,
+    }
+
+    batch_encode_images(input_images_dir, encode_params)
     return
 
 
