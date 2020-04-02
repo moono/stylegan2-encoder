@@ -156,6 +156,10 @@ class ImageEncoder(object):
             # reset target image & output name
             self.target_image.assign(self.load_image(image_fn, self.image_size))
 
+            # reset optimizer state
+            for v in self.optimizer.variables():
+                v.assign(tf.zeros_like(v))
+
             # reset w too
             self.x.assign(self.initial_x)
             self.run_encoder = True
@@ -181,7 +185,8 @@ class ImageEncoder(object):
 
         # save initial state
         if self.results_on_tensorboard:
-            self.write_to_tensorboard(step=0)
+            # with dummy loss value
+            self.write_to_tensorboard(step=0, loss=tf.constant(1.0))
 
         print('')
         print('Running: {}'.format(self.output_name_prefix))
@@ -193,7 +198,7 @@ class ImageEncoder(object):
             if ts % self.save_every == 0:
                 print('[step {:05d}/{:05d}]: {:.3f}'.format(ts, self.n_train_step, loss_val.numpy()))
                 if self.results_on_tensorboard:
-                    self.write_to_tensorboard(step=ts)
+                    self.write_to_tensorboard(step=ts, loss=loss_val)
 
         # lets restore with optimized embeddings
         final_image = self.encoder_model.run_synthesis_model(self.x)
@@ -202,14 +207,15 @@ class ImageEncoder(object):
         np.save(os.path.join(self.output_dir, self.output_template_npy.format(self.output_name_prefix)), self.x.numpy())
         return
 
-    def write_to_tensorboard(self, step):
+    def write_to_tensorboard(self, step, loss):
         # get current fake image
         fake_image = self.encoder_model.run_synthesis_model(self.x)
         fake_image = self.convert_image_to_uint8(fake_image)
 
         # save to tensorboard
         with self.train_summary_writer.as_default():
-            tf.summary.histogram('x_{}'.format(self.output_name_prefix), self.x, step=step)
+            tf.summary.scalar('loss_{}'.format(self.output_name_prefix), loss, step=step)
+            # tf.summary.histogram('x_{}'.format(self.output_name_prefix), self.x, step=step)
             tf.summary.image('encoded_{}'.format(self.output_name_prefix), fake_image, step=step)
         return
 
