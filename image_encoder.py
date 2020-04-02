@@ -205,6 +205,12 @@ class ImageEncoder(object):
                 if self.results_on_tensorboard:
                     self.write_to_tensorboard(step=ts, loss=loss_val)
 
+        # check Nan before saving
+        to_save = self.x.numpy()
+        if np.isnan(to_save).all():
+            print('{}: Nan value after optimization!!'.format(self.output_name_prefix))
+            return
+
         # lets restore with optimized embeddings
         final_image = self.encoder_model.run_synthesis_model(self.x)
         self.save_image(final_image,
