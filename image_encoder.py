@@ -145,7 +145,6 @@ class ImageEncoder(object):
 
         return encoder_model, initial_var, sample_image
 
-    @tf.function
     def set_target_image(self, image_fn):
         self.output_name_prefix = os.path.basename(image_fn)
 
@@ -201,6 +200,12 @@ class ImageEncoder(object):
 
             # save results
             if ts % self.save_every == 0:
+                # check nan
+                if np.isnan(loss_val.numpy()):
+                    print('{}: Nan value during optimization!!'.format(self.output_name_prefix))
+                    return
+
+                # print status
                 print('[step {:05d}/{:05d}]: {:.3f}'.format(ts, self.n_train_step, loss_val.numpy()))
                 if self.results_on_tensorboard:
                     self.write_to_tensorboard(step=ts, loss=loss_val)
