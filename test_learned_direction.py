@@ -26,7 +26,16 @@ def preprocess_image(src_file, output_base_dir, is_on_w, generator_ckpt_dir, lpi
         image_align(src_file, dst_file, face_landmarks, output_size=1024, transform_size=4096, enable_padding=True)
 
     print('preprocess...encode aligned image')
-    latent_vector_file = encode_image(dst_file, output_base_dir, is_on_w, generator_ckpt_dir, lpips_ckpt_dir, results_on_tensorboard=False)
+    latent_vector_file = encode_image(dst_file, {
+        'is_on_w': is_on_w,
+        'image_size': 256,
+        'learning_rate': 0.01,
+        'n_train_step': 1000,
+        'generator_ckpt_dir': generator_ckpt_dir,
+        'lpips_ckpt_dir': lpips_ckpt_dir,
+        'output_dir': output_base_dir,
+        'results_on_tensorboard': False,
+    })
     latent_vector = np.load(latent_vector_file)
     latent_vector = np.squeeze(latent_vector, axis=0)
     return latent_vector
