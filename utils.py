@@ -27,3 +27,13 @@ def adjust_dynamic_range(images, range_in, range_out, out_dtype):
     images = tf.clip_by_value(images, range_out[0], range_out[1])
     images = tf.cast(images, dtype=out_dtype)
     return images
+
+
+def str_to_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value.lower() in {'false', 'f', '0', 'no', 'n'}:
+        return False
+    elif value.lower() in {'true', 't', '1', 'yes', 'y'}:
+        return True
+    raise ValueError(f'{value} is not a valid boolean value')

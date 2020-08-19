@@ -6,7 +6,7 @@ import numpy as np
 import tensorflow as tf
 from PIL import Image
 
-from utils import allow_memory_growth, adjust_dynamic_range
+from utils import str_to_bool, allow_memory_growth, adjust_dynamic_range
 from stylegan2.generator import Generator
 from encoder_model_lpips import EncoderModelLpips
 
@@ -264,24 +264,24 @@ def batch_encode_images(input_images_dir, encode_params):
 def main():
     # global program arguments parser
     parser = argparse.ArgumentParser(description='')
-    parser.add_argument('--allow_memory_growth', default='TRUE', type=str)
+    parser.add_argument('--allow_memory_growth', type=str_to_bool, nargs='?', const=True, default=True)
     parser.add_argument('--input_images_dir', default='/home/mookyung/Downloads/labeledAll', type=str)
     parser.add_argument('--generator_ckpt_dir', default='./stylegan2/official-converted', type=str)
     parser.add_argument('--lpips_ckpt_dir', default='./lpips', type=str)
     parser.add_argument('--output_base_dir', default='./outputs', type=str)
-    parser.add_argument('--is_on_w', default='TRUE', type=str)
-    parser.add_argument('--results_on_tensorboard', default='TRUE', type=str)
+    parser.add_argument('--is_on_w', type=str_to_bool, nargs='?', const=True, default=True)
+    parser.add_argument('--results_on_tensorboard', type=str_to_bool, nargs='?', const=True, default=True)
     args = vars(parser.parse_args())
 
-    if args['allow_memory_growth'] == 'TRUE':
+    if args['allow_memory_growth']:
         allow_memory_growth()
 
     input_images_dir = args['input_images_dir']
     generator_ckpt_dir = args['generator_ckpt_dir']
     lpips_ckpt_dir = args['lpips_ckpt_dir']
     output_base_dir = args['output_base_dir']
-    is_on_w = True if args['is_on_w'] == 'TRUE' else False
-    results_on_tensorboard = True if args['results_on_tensorboard'] == 'TRUE' else False
+    is_on_w = args['is_on_w']
+    results_on_tensorboard = args['results_on_tensorboard']
 
     encode_params = {
         'is_on_w': is_on_w,
