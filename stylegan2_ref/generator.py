@@ -1,9 +1,8 @@
-import numpy as np
 import tensorflow as tf
 
-from stylegan2.utils import lerp
-from stylegan2.upfirdn_2d import setup_resample_kernel, upsample_2d
-from stylegan2.custom_layers import LabelEmbedding, Dense, Bias, LeakyReLU, Noise, FusedModConv
+from stylegan2_ref.utils import lerp
+from stylegan2_ref.upfirdn_2d import setup_resample_kernel, upsample_2d
+from stylegan2_ref.custom_layers import LabelEmbedding, Dense, BiasAct, LeakyReLU, Noise, FusedModConv
 
 
 class ToRGB(tf.keras.layers.Layer):
@@ -12,7 +11,7 @@ class ToRGB(tf.keras.layers.Layer):
         self.in_ch = in_ch
         self.conv = FusedModConv(fmaps=3, kernel=1, gain=1.0, lrmul=1.0, style_fmaps=self.in_ch,
                                  demodulate=False, up=False, down=False, resample_kernel=None, name='conv')
-        self.apply_bias = Bias(lrmul=1.0, name='bias')
+        self.apply_bias = BiasAct(lrmul=1.0, act='linear', name='bias')
 
     def call(self, inputs, training=None, mask=None):
         x, w = inputs
@@ -45,12 +44,10 @@ class Mapping(tf.keras.layers.Layer):
         self.normalize = tf.keras.layers.Lambda(lambda x: x * tf.math.rsqrt(tf.reduce_mean(tf.square(x), axis=1, keepdims=True) + 1e-8))
 
         self.dense_layers = list()
-        self.bias_layers = list()
-        self.act_layers = list()
+        self.bias_act_layers = list()
         for ii in range(self.n_mapping):
             self.dense_layers.append(Dense(w_dim, gain=self.gain, lrmul=self.lrmul, name='dense_{:d}'.format(ii)))
-            self.bias_layers.append(Bias(lrmul=self.lrmul, name='bias_{:d}'.format(ii)))
-            self.act_layers.append(LeakyReLU(name='lrelu_{:d}'.format(ii)))
+            self.bias_act_layers.append(BiasAct(lrmul=self.lrmul, act='lrelu', name='bias_{:d}'.format(ii)))
 
     def call(self, inputs, training=None, mask=None):
         latents, labels = inputs
@@ -65,10 +62,9 @@ class Mapping(tf.keras.layers.Layer):
         x = self.normalize(x)
 
         # apply mapping blocks
-        for dense, apply_bias, leaky_relu in zip(self.dense_layers, self.bias_layers, self.act_layers):
+        for dense, apply_bias_act in zip(self.dense_layers, self.bias_act_layers):
             x = dense(x)
-            x = apply_bias(x)
-            x = leaky_relu(x)
+            x = apply_bias_act(x)
 
         return x
 
@@ -78,7 +74,6 @@ class Mapping(tf.keras.layers.Layer):
             'w_dim': self.w_dim,
             'labels_dim': self.labels_dim,
             'n_mapping': self.n_mapping,
-            'n_broadcast': self.n_broadcast,
             'gain': self.gain,
             'lrmul': self.lrmul,
         })
@@ -98,8 +93,7 @@ class SynthesisConstBlock(tf.keras.layers.Layer):
         self.conv = FusedModConv(fmaps=self.fmaps, kernel=3, gain=self.gain, lrmul=self.lrmul, style_fmaps=self.fmaps,
                                  demodulate=True, up=False, down=False, resample_kernel=[1, 3, 3, 1], name='conv')
         self.apply_noise = Noise(name='noise')
-        self.apply_bias = Bias(lrmul=self.lrmul, name='bias')
-        self.leaky_relu = LeakyReLU(name='lrelu')
+        self.apply_bias_act = BiasAct(lrmul=self.lrmul, act='lrelu', name='bias')
 
     def build(self, input_shape):
         # starting const variable
@@ -117,8 +111,7 @@ class SynthesisConstBlock(tf.keras.layers.Layer):
         # conv block
         x = self.conv([x, w0])
         x = self.apply_noise(x)
-        x = self.apply_bias(x)
-        x = self.leaky_relu(x)
+        x = self.apply_bias_act(x)
         return x
 
     def get_config(self):
@@ -145,15 +138,13 @@ class SynthesisBlock(tf.keras.layers.Layer):
         self.conv_0 = FusedModConv(fmaps=self.fmaps, kernel=3, gain=self.gain, lrmul=self.lrmul, style_fmaps=self.in_ch,
                                    demodulate=True, up=True, down=False, resample_kernel=[1, 3, 3, 1], name='conv_0')
         self.apply_noise_0 = Noise(name='noise_0')
-        self.apply_bias_0 = Bias(lrmul=self.lrmul, name='bias_0')
-        self.leaky_relu_0 = LeakyReLU(name='lrelu_0')
+        self.apply_bias_act_0 = BiasAct(lrmul=self.lrmul, act='lrelu', name='bias_0')
 
         # conv block
         self.conv_1 = FusedModConv(fmaps=self.fmaps, kernel=3, gain=self.gain, lrmul=self.lrmul, style_fmaps=self.fmaps,
                                    demodulate=True, up=False, down=False, resample_kernel=[1, 3, 3, 1], name='conv_1')
         self.apply_noise_1 = Noise(name='noise_1')
-        self.apply_bias_1 = Bias(lrmul=self.lrmul, name='bias_1')
-        self.leaky_relu_1 = LeakyReLU(name='lrelu_1')
+        self.apply_bias_act_1 = BiasAct(lrmul=self.lrmul, act='lrelu', name='bias_1')
 
     def call(self, inputs, training=None, mask=None):
         x, w0, w1 = inputs
@@ -161,14 +152,12 @@ class SynthesisBlock(tf.keras.layers.Layer):
         # conv0 up
         x = self.conv_0([x, w0])
         x = self.apply_noise_0(x)
-        x = self.apply_bias_0(x)
-        x = self.leaky_relu_0(x)
+        x = self.apply_bias_act_0(x)
 
         # conv block
         x = self.conv_1([x, w1])
         x = self.apply_noise_1(x)
-        x = self.apply_bias_1(x)
-        x = self.leaky_relu_1(x)
+        x = self.apply_bias_act_1(x)
         return x
 
     def get_config(self):
@@ -248,43 +237,34 @@ class Generator(tf.keras.Model):
         self.n_mapping = g_params['n_mapping']
         self.resolutions = g_params['resolutions']
         self.featuremaps = g_params['featuremaps']
-        self.w_ema_decay = g_params['w_ema_decay']
-        self.style_mixing_prob = g_params['style_mixing_prob']
+        self.w_ema_decay = 0.995
+        self.style_mixing_prob = 0.9
 
         self.n_broadcast = len(self.resolutions) * 2
-        self.mixing_layer_indices = np.arange(self.n_broadcast)[np.newaxis, :, np.newaxis]
+        self.mixing_layer_indices = tf.range(self.n_broadcast, dtype=tf.int32)[tf.newaxis, :, tf.newaxis]
 
         self.g_mapping = Mapping(self.w_dim, self.labels_dim, self.n_mapping, name='g_mapping')
-        self.broadcast = tf.keras.layers.Lambda(lambda x: tf.tile(x[:, np.newaxis], [1, self.n_broadcast, 1]))
+        self.broadcast = tf.keras.layers.Lambda(lambda x: tf.tile(x[:, tf.newaxis], [1, self.n_broadcast, 1]))
         self.synthesis = Synthesis(self.resolutions, self.featuremaps, name='g_synthesis')
 
     def build(self, input_shape):
         # w_avg
-        self.w_avg = tf.Variable(tf.zeros(shape=[self.w_dim], dtype=tf.dtypes.float32), name='w_avg', trainable=False)
+        self.w_avg = tf.Variable(tf.zeros(shape=[self.w_dim], dtype=tf.dtypes.float32), name='w_avg', trainable=False,
+                                 synchronization=tf.VariableSynchronization.ON_READ,
+                                 aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
 
-    def set_as_moving_average_of(self, src_net, beta=0.99, beta_nontrainable=0.0):
-        def split_first_name(name):
-            splitted = name.split('/')
-            new_name = '/'.join(splitted[1:])
-            return new_name
+    @tf.function
+    def set_as_moving_average_of(self, src_net):
+        beta, beta_nontrainable = 0.99, 0.0
 
-        for cw in self.trainable_weights:
-            cw_name = split_first_name(cw.name)
-            for sw in src_net.trainable_weights:
-                sw_name = split_first_name(sw.name)
-                if cw_name == sw_name:
-                    assert sw.shape == cw.shape
-                    cw.assign(lerp(sw, cw, beta))
-                    break
+        for cw, sw in zip(self.weights, src_net.weights):
+            assert sw.shape == cw.shape
+            # print('{} <=> {}'.format(cw.name, sw.name))
 
-        for cw in self.non_trainable_weights:
-            cw_name = split_first_name(cw.name)
-            for sw in src_net.non_trainable_weights:
-                sw_name = split_first_name(sw.name)
-                if cw_name == sw_name:
-                    assert sw.shape == cw.shape
-                    cw.assign(lerp(sw, cw, beta_nontrainable))
-                    break
+            if 'w_avg' in cw.name:
+                cw.assign(lerp(sw, cw, beta_nontrainable))
+            else:
+                cw.assign(lerp(sw, cw, beta))
         return
 
     def update_moving_average_of_w(self, w_broadcasted):
@@ -302,6 +282,10 @@ class Generator(tf.keras.Model):
         w_broadcasted2 = self.broadcast(dlatents2)
 
         # find mixing limit index
+        # mixing_cutoff_index = tf.cond(
+        #     pred=tf.less(tf.random.uniform([], 0.0, 1.0), self.style_mixing_prob),
+        #     true_fn=lambda: tf.random.uniform([], 1, self.n_broadcast, dtype=tf.dtypes.int32),
+        #     false_fn=lambda: tf.constant(self.n_broadcast, dtype=tf.dtypes.int32))
         if tf.random.uniform([], 0.0, 1.0) < self.style_mixing_prob:
             mixing_cutoff_index = tf.random.uniform([], 1, self.n_broadcast, dtype=tf.dtypes.int32)
         else:
@@ -314,21 +298,19 @@ class Generator(tf.keras.Model):
             y=w_broadcasted2)
         return mixed_w_broadcasted
 
-    def truncation_trick(self, w_broadcasted, truncation_cutoff, truncation_psi):
-        ones = np.ones_like(self.mixing_layer_indices, dtype=np.float32)
+    def truncation_trick(self, w_broadcasted, truncation_psi, truncation_cutoff=None):
+        ones = tf.ones_like(self.mixing_layer_indices, dtype=tf.float32)
+        tpsi = ones * truncation_psi
         if truncation_cutoff is None:
-            truncation_coefs = ones * truncation_psi
+            truncation_coefs = tpsi
         else:
-            truncation_coefs = ones
-            for index in range(self.n_broadcast):
-                if index < truncation_cutoff:
-                    truncation_coefs[:, index, :] = truncation_psi
+            indices = tf.range(self.n_broadcast)
+            truncation_coefs = tf.where(condition=tf.less(indices, truncation_cutoff), x=tpsi, y=ones)
 
         truncated_w_broadcasted = lerp(self.w_avg, w_broadcasted, truncation_coefs)
         return truncated_w_broadcasted
 
-    @tf.function
-    def call(self, inputs, truncation_cutoff=None, truncation_psi=1.0, training=None, mask=None):
+    def call(self, inputs, ret_w_broadcasted=False, truncation_psi=1.0, truncation_cutoff=None, training=None, mask=None):
         latents, labels = inputs
 
         dlatents = self.g_mapping([latents, labels])
@@ -339,58 +321,14 @@ class Generator(tf.keras.Model):
             w_broadcasted = self.style_mixing_regularization(latents, labels, w_broadcasted)
 
         if not training:
-            w_broadcasted = self.truncation_trick(w_broadcasted, truncation_cutoff, truncation_psi)
+            w_broadcasted = self.truncation_trick(w_broadcasted, truncation_psi, truncation_cutoff)
 
         image_out = self.synthesis(w_broadcasted)
-        return image_out, w_broadcasted
+
+        if ret_w_broadcasted:
+            return image_out, w_broadcasted
+        else:
+            return image_out
 
     def compute_output_shape(self, input_shape):
-        assert isinstance(input_shape, list)
-
-        # shape_latents, shape_labels = input_shape
         return input_shape[0][0], 3, self.resolutions[-1], self.resolutions[-1]
-
-    @tf.function
-    def serve(self, latents, labels, truncation_psi):
-        dlatents = self.g_mapping([latents, labels])
-        w_broadcasted = self.broadcast(dlatents)
-        w_broadcasted = self.truncation_trick(w_broadcasted, truncation_cutoff=None, truncation_psi=truncation_psi)
-        image_out = self.synthesis(w_broadcasted)
-
-        image_out.set_shape([None, 3, self.resolutions[-1], self.resolutions[-1]])
-        return image_out
-
-
-def main():
-    batch_size = 4
-    g_params_with_label = {
-        'z_dim': 512,
-        'w_dim': 512,
-        'labels_dim': 0,
-        'n_mapping': 8,
-        'resolutions': [4, 8, 16, 32, 64, 128, 256, 512, 1024],
-        'featuremaps': [512, 512, 512, 512, 512, 256, 128, 64, 32],
-        'w_ema_decay': 0.995,
-        'style_mixing_prob': 0.9,
-        'truncation_psi': 0.5,
-        'truncation_cutoff': None,
-    }
-
-    test_z = np.ones((batch_size, g_params_with_label['z_dim']), dtype=np.float32)
-    test_y = np.ones((batch_size, g_params_with_label['labels_dim']), dtype=np.float32)
-
-    generator = Generator(g_params_with_label)
-    fake_images1, _ = generator([test_z, test_y], training=True)
-    fake_images2, _ = generator([test_z, test_y], training=False)
-    generator.summary()
-
-    print(fake_images1.shape)
-
-    print()
-    for v in generator.variables:
-        print('{}: {}'.format(v.name, v.shape))
-    return
-
-
-if __name__ == '__main__':
-    main()
