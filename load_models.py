@@ -10,7 +10,7 @@ FFHQ_G_PARAMS = {
 }
 
 
-def load_generator(is_g_clone=False, ckpt_dir=None):
+def load_generator(is_g_clone=False, ckpt_dir=None, trainable=False):
     from stylegan2_ref.generator import Generator
 
     test_latent = tf.ones((1, FFHQ_G_PARAMS['z_dim']), dtype=tf.float32)
@@ -29,10 +29,14 @@ def load_generator(is_g_clone=False, ckpt_dir=None):
         ckpt.restore(manager.latest_checkpoint).expect_partial()
         if manager.latest_checkpoint:
             print(f'Generator restored from {manager.latest_checkpoint}')
+
+    # set weight status
+    for layer in generator.layers:
+        layer.trainable = trainable
     return generator
 
 
-def create_synthesis_from_trained_generator(stylegan2_ckpt_dir, truncation_psi):
+def create_synthesis_from_trained_generator(stylegan2_ckpt_dir, truncation_psi, trainable=False):
     from partial_models.synthesis_w import SynthesisW
     from partial_models.synthesis_w_plus import SynthesisWPlus
 
@@ -41,17 +45,35 @@ def create_synthesis_from_trained_generator(stylegan2_ckpt_dir, truncation_psi):
     # create generator instance
     g_clone = load_generator(is_g_clone=True, ckpt_dir=stylegan2_ckpt_dir)
 
-    # create synthesis model
+    # create synthesis model and copy weight from pretrained generator
     if is_on_w:
-        synthesis_w = SynthesisW(g_clone, truncation_psi)
-        synthesis_w.build((None, g_clone.w_dim))
-        synthesis_w.set_weights(g_clone)
-        return synthesis_w
+        synthesis = SynthesisW(g_clone, truncation_psi)
+        synthesis.build((None, g_clone.w_dim))
+        synthesis.set_weights(g_clone)
     else:
-        synthesis_w_plus = SynthesisWPlus(g_clone)
-        synthesis_w_plus.build((None, g_clone.n_broadcast, g_clone.w_dim))
-        synthesis_w_plus.set_weights(g_clone)
-        return synthesis_w_plus
+        synthesis = SynthesisWPlus(g_clone)
+        synthesis.build((None, g_clone.n_broadcast, g_clone.w_dim))
+        synthesis.set_weights(g_clone)
+
+    # set weight status
+    for layer in synthesis.layers:
+        layer.trainable = trainable
+    return synthesis
+
+
+def load_lpips(lpips_ckpt_dir, image_size, trainable=False):
+    import os
+    from lpips.lpips_tensorflow import learned_perceptual_metric_model
+
+    # load model
+    vgg_ckpt_fn = os.path.join(lpips_ckpt_dir, 'vgg', 'exported')
+    lin_ckpt_fn = os.path.join(lpips_ckpt_dir, 'lin', 'exported')
+    perceptual_model = learned_perceptual_metric_model(image_size, vgg_ckpt_fn, lin_ckpt_fn)
+
+    # set weight status
+    for layer in perceptual_model.layers:
+        layer.trainable = trainable
+    return perceptual_model
 
 
 def main():
