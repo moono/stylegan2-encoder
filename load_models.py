@@ -68,7 +68,7 @@ def main():
     allow_memory_growth()
 
     # test
-    stylegan2_ckpt_dir = './stylegan2_ref/official-converted/ref'
+    stylegan2_ckpt_dir = './stylegan2_ref/official-converted'
     test_cases = [0.5, 1.0, None]
     for truncation_psi in test_cases:
         is_on_w = False if truncation_psi is None else True
