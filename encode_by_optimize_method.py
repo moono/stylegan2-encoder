@@ -7,257 +7,157 @@ import tensorflow as tf
 from PIL import Image
 
 from utils import str_to_bool, allow_memory_growth, adjust_dynamic_range
-from stylegan2.generator import Generator
-from encoder_model_lpips import EncoderModelLpips
+from load_models import create_synthesis_from_trained_generator, load_lpips, load_generator
 
 
-class ImageEncoder(object):
-    def __init__(self, params):
-        # set variables
-        self.is_on_w = params['is_on_w']
-        self.image_size = params['image_size']
-        self.learning_rate = params['learning_rate']
-        self.n_train_step = params['n_train_step']
-        self.results_on_tensorboard = params['results_on_tensorboard']
-        self.generator_ckpt_dir = params['generator_ckpt_dir']
-        self.lpips_ckpt_dir = params['lpips_ckpt_dir']
-        self.output_dir = os.path.join(params['output_dir'], 'on_w' if params['is_on_w'] else 'on_w_plus')
+def sample_initial_w(stylegan2_ckpt_dir, is_on_w, n_w_samples_to_draw=10000):
+    # create generator instance
+    g_clone = load_generator(is_g_clone=True, ckpt_dir=stylegan2_ckpt_dir)
 
-        self.optimizer = tf.keras.optimizers.Adam(self.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-8)
-        self.output_name_prefix = ''
-        self.output_template_npy = '{:s}_encoded.npy'
-        self.output_template_png = '{:s}_encoded.png'
-        self.save_every = 100
-        self.n_w_samples_to_draw = 10000
-        self.run_encoder = False
+    # sample w for statistics
+    initial_zs = tf.random.normal(shape=[n_w_samples_to_draw, g_clone.z_dim])
+    initial_ls = tf.random.normal(shape=[n_w_samples_to_draw, g_clone.labels_dim])
+    initial_ws = g_clone.g_mapping([initial_zs, initial_ls])
+    initial_w = tf.reduce_mean(initial_ws, axis=0, keepdims=True)
+    initial_w_broadcast = g_clone.broadcast(initial_w)
+    initial_var = initial_w if is_on_w else initial_w_broadcast
+    return initial_var
 
-        # prepare result dir
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
 
-        # set model
-        self.encoder_model, self.initial_x, sample_image = self.load_encoder_model()
+def load_image(image_fn, image_size):
+    image = Image.open(image_fn)
+    image = image.resize((image_size, image_size))
+    image = np.asarray(image)
+    image = np.expand_dims(image, axis=0)
+    image = tf.constant(image, dtype=tf.float32)
+    return image
 
-        # prepare variables to optimize
-        self.target_image = tf.Variable(
-            initial_value=tf.zeros(shape=(1, self.image_size, self.image_size, 3), dtype=np.float32),
-            trainable=False)
-        self.x = tf.Variable(
-            initial_value=tf.zeros_like(self.initial_x, dtype=np.float32),
-            trainable=True)
 
-        # save initial state images
-        self.x.assign(self.initial_x)
-        initial_image = self.encoder_model.run_synthesis_model(self.x)
-        self.save_image(sample_image, os.path.join(self.output_dir, 'generator_sample.png'))
-        self.save_image(initial_image, out_fn=os.path.join(self.output_dir, 'initial_w.png'))
+def save_image(fake_image, out_fn):
+    image = adjust_dynamic_range(fake_image, range_in=(-1.0, 1.0), range_out=(0.0, 255.0), out_dtype=tf.float32)
+    image = tf.transpose(image, [0, 2, 3, 1])
+    image = tf.cast(image, dtype=tf.uint8)
+    image = tf.squeeze(image, axis=0)
+    image = Image.fromarray(image.numpy())
+    image.save(out_fn)
+    return
 
-        # prepare tensorboard writer
-        if self.results_on_tensorboard:
-            self.train_summary_writer = tf.summary.create_file_writer(self.output_dir)
-        else:
-            self.train_summary_writer = None
+
+@tf.function
+def step(x, target_image, image_size, synthesis, lpips, optimizer):
+    with tf.GradientTape() as tape:
+        tape.watch([x, target_image])
+
+        # forward pass
+        fake_image = synthesis(x)
+        fake_image = adjust_dynamic_range(fake_image, range_in=(-1.0, 1.0), range_out=(0.0, 255.0), out_dtype=tf.float32)
+        fake_image = tf.transpose(fake_image, [0, 2, 3, 1])
+        fake_image = tf.image.resize(fake_image, size=(image_size, image_size))
+
+        loss = lpips([fake_image, target_image])
+
+    t_vars = [x]
+    gradients = tape.gradient(loss, t_vars)
+    optimizer.apply_gradients(zip(gradients, t_vars))
+    return loss
+
+
+def write_to_tensorboard(summary_writer, name, x, synthesis, step_count, loss):
+    # get current fake image
+    fake_image = synthesis(x)
+    fake_image = adjust_dynamic_range(fake_image, range_in=(-1.0, 1.0), range_out=(0.0, 255.0), out_dtype=tf.float32)
+    fake_image = tf.transpose(fake_image, [0, 2, 3, 1])
+    fake_image = tf.cast(fake_image, dtype=tf.uint8)
+
+    # save to tensorboard
+    with summary_writer.as_default():
+        tf.summary.scalar(f'loss_{name}', loss, step=step_count)
+        tf.summary.image(f'encoded_{name}', fake_image, step=step_count)
+    return
+
+
+def encode(image_fn, synthesis, lpips, initial_x, e_params, save_every, summary_writer):
+    fn_only = os.path.basename(image_fn)
+    initial_image = load_image(image_fn, e_params['image_size'])
+
+    # check if result already exists
+    full_path_npy = os.path.join(e_params['output_dir'], f'{fn_only:s}_encoded.npy')
+    if os.path.exists(full_path_npy):
+        print(f'Already encoded: {fn_only} !!!')
         return
 
-    @staticmethod
-    def save_image(fake_image, out_fn):
-        image = adjust_dynamic_range(fake_image, range_in=(-1.0, 1.0), range_out=(0.0, 255.0),
-                                     out_dtype=tf.dtypes.float32)
-        image = tf.transpose(image, [0, 2, 3, 1])
-        image = tf.cast(image, dtype=tf.dtypes.uint8)
-        image = tf.squeeze(image, axis=0)
-        image = Image.fromarray(image.numpy())
-        image.save(out_fn)
+    # create variables to optimize
+    target_image = tf.Variable(tf.zeros(shape=(1, e_params['image_size'], e_params['image_size'], 3), dtype=np.float32), trainable=False)
+    x = tf.Variable(tf.zeros_like(initial_x, dtype=np.float32), trainable=True)
+
+    # set initial values for variables
+    target_image.assign(initial_image)
+    x.assign(initial_x)
+
+    # initialize optimizer
+    optimizer = tf.keras.optimizers.Adam(e_params['learning_rate'], beta_1=0.9, beta_2=0.999, epsilon=1e-8)
+
+    # start optimizing
+    print(f'Running: {fn_only}')
+    for ts in range(1, e_params['n_train_step'] + 1):
+        # optimize step
+        loss_val = step(x, target_image, e_params['image_size'], synthesis, lpips, optimizer)
+
+        # save results
+        if ts % save_every == 0:
+            # check nan
+            if np.isnan(loss_val.numpy()):
+                print(f'{fn_only}: Nan value during optimization!!')
+                return
+
+            # print status
+            print(f'[step {ts:05d}/{e_params["n_train_step"]:05d}]: {loss_val.numpy():.3f}')
+            if summary_writer is not None:
+                write_to_tensorboard(summary_writer, fn_only, x, synthesis, step_count=ts, loss=loss_val)
+
+    # check Nan before saving
+    to_save = x.numpy()
+    if np.isnan(to_save).all():
+        print(f'{fn_only}: Nan value after optimization!!')
         return
 
-    @staticmethod
-    def load_image(image_fn, image_size):
-        image = Image.open(image_fn)
-        image = image.resize((image_size, image_size))
-        image = np.asarray(image)
-        image = np.expand_dims(image, axis=0)
-        image = tf.constant(image, dtype=tf.dtypes.float32)
-        return image
-
-    @staticmethod
-    def convert_image_to_uint8(fake_image):
-        image = adjust_dynamic_range(fake_image, range_in=(-1.0, 1.0), range_out=(0.0, 255.0),
-                                     out_dtype=tf.dtypes.float32)
-        image = tf.transpose(image, [0, 2, 3, 1])
-        image = tf.cast(image, dtype=tf.dtypes.uint8)
-        return image
-
-    def load_encoder_model(self):
-        # build generator object
-        g_params = {
-            'z_dim': 512,
-            'w_dim': 512,
-            'labels_dim': 0,
-            'n_mapping': 8,
-            'resolutions': [4, 8, 16, 32, 64, 128, 256, 512, 1024],
-            'featuremaps': [512, 512, 512, 512, 512, 256, 128, 64, 32],
-            'w_ema_decay': 0.995,
-            'style_mixing_prob': 0.9,
-        }
-        generator = Generator(g_params)
-        test_latent = np.random.normal(loc=0.0, scale=1.0, size=(1, g_params['z_dim']))
-        test_labels = np.ones((1, g_params['labels_dim']), dtype=np.float32)
-        _, __ = generator([test_latent, test_labels], training=False)
-
-        # try to restore from g_clone
-        ckpt = tf.train.Checkpoint(g_clone=generator)
-        manager = tf.train.CheckpointManager(ckpt, self.generator_ckpt_dir, max_to_keep=1)
-        ckpt.restore(manager.latest_checkpoint).expect_partial()
-        if manager.latest_checkpoint:
-            print('Restored from {}'.format(manager.latest_checkpoint))
-        else:
-            raise ValueError('Wrong checkpoint dir!!')
-
-        # sample image
-        sample_image, __ = generator([test_latent, test_labels], truncation_psi=0.5, training=False)
-
-        # sample w for statistics
-        n_broadcast = len(g_params['resolutions']) * 2
-        initial_zs = np.random.RandomState(123).randn(self.n_w_samples_to_draw, g_params['z_dim'])
-        initial_ls = np.ones((self.n_w_samples_to_draw, g_params['labels_dim']), dtype=np.float32)
-        initial_ws = generator.g_mapping([initial_zs, initial_ls])
-        initial_w = tf.reduce_mean(initial_ws, axis=0, keepdims=True)
-        initial_w_broadcast = tf.tile(initial_w[:, np.newaxis], [1, n_broadcast, 1])
-        initial_var = initial_w if self.is_on_w else initial_w_broadcast
-
-        # build encoder model
-        encoder_model = EncoderModelLpips(g_params['resolutions'], g_params['featuremaps'],
-                                          self.image_size, self.lpips_ckpt_dir, self.is_on_w)
-        if self.is_on_w:
-            test_inputs = np.random.normal(loc=0.0, scale=1.0, size=(1, g_params['w_dim']))
-        else:
-            test_inputs = np.random.normal(loc=0.0, scale=1.0, size=(1, n_broadcast, g_params['w_dim']))
-        test_target_image = np.ones((1, self.image_size, self.image_size, 3), dtype=np.float32)
-        _, __ = encoder_model([test_inputs, test_target_image])
-
-        # copy weights from generator
-        encoder_model.set_weights(generator.synthesis)
-        _, __ = encoder_model([test_inputs, test_target_image])
-
-        # freeze weights
-        for layer in encoder_model.layers:
-            layer.trainable = False
-
-        return encoder_model, initial_var, sample_image
-
-    def set_target_image(self, image_fn):
-        self.output_name_prefix = os.path.basename(image_fn)
-
-        # check if result already exists
-        full_path = os.path.join(self.output_dir, self.output_template_npy.format(self.output_name_prefix))
-        if os.path.exists(full_path):
-            print('Already encoded: {} !!!'.format(self.output_name_prefix))
-            self.run_encoder = False
-        else:
-            # reset target image & output name
-            self.target_image.assign(self.load_image(image_fn, self.image_size))
-
-            # reset optimizer state ==> Not Working???!!!
-            for w in self.optimizer.weights:
-                w.assign(tf.zeros_like(w))
-
-            # # reset optimizer (remove @tf.function decorator in step() function) ==> too slow
-            # self.optimizer = tf.keras.optimizers.Adam(self.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-8)
-
-            # reset w too
-            self.x.assign(self.initial_x)
-            self.run_encoder = True
-        return
-
-    @tf.function
-    def step(self):
-        with tf.GradientTape() as tape:
-            tape.watch([self.x, self.target_image])
-
-            # forward pass
-            fake_image, loss = self.encoder_model([self.x, self.target_image])
-
-        t_vars = [self.x]
-        gradients = tape.gradient(loss, t_vars)
-        self.optimizer.apply_gradients(zip(gradients, t_vars))
-        return loss
-
-    def encode_image(self):
-        if not self.run_encoder:
-            print('Not encoding: {}'.format(self.output_name_prefix))
-            return
-
-        # save initial state
-        if self.results_on_tensorboard:
-            # with dummy loss value
-            self.write_to_tensorboard(step=0, loss=tf.constant(1.0))
-
-        print('')
-        print('Running: {}'.format(self.output_name_prefix))
-        for ts in range(1, self.n_train_step + 1):
-            # optimize step
-            loss_val = self.step()
-
-            # save results
-            if ts % self.save_every == 0:
-                # check nan
-                if np.isnan(loss_val.numpy()):
-                    print('{}: Nan value during optimization!!'.format(self.output_name_prefix))
-                    return
-
-                # print status
-                print('[step {:05d}/{:05d}]: {:.3f}'.format(ts, self.n_train_step, loss_val.numpy()))
-                if self.results_on_tensorboard:
-                    self.write_to_tensorboard(step=ts, loss=loss_val)
-
-        # check Nan before saving
-        to_save = self.x.numpy()
-        if np.isnan(to_save).all():
-            print('{}: Nan value after optimization!!'.format(self.output_name_prefix))
-            return
-
-        # lets restore with optimized embeddings
-        final_image = self.encoder_model.run_synthesis_model(self.x)
-        self.save_image(final_image,
-                        out_fn=os.path.join(self.output_dir, self.output_template_png.format(self.output_name_prefix)))
-        np.save(os.path.join(self.output_dir, self.output_template_npy.format(self.output_name_prefix)), self.x.numpy())
-        return
-
-    def write_to_tensorboard(self, step, loss):
-        # get current fake image
-        fake_image = self.encoder_model.run_synthesis_model(self.x)
-        fake_image = self.convert_image_to_uint8(fake_image)
-
-        # save to tensorboard
-        with self.train_summary_writer.as_default():
-            tf.summary.scalar('loss_{}'.format(self.output_name_prefix), loss, step=step)
-            # tf.summary.histogram('x_{}'.format(self.output_name_prefix), self.x, step=step)
-            tf.summary.image('encoded_{}'.format(self.output_name_prefix), fake_image, step=step)
-        return
+    # lets restore with optimized embeddings
+    final_image = synthesis(x)
+    save_image(final_image, out_fn=os.path.join(e_params['output_dir'], f'{fn_only:s}_encoded.png'))
+    np.save(os.path.join(e_params['output_dir'], f'{fn_only:s}_encoded.npy'), x.numpy())
+    return
 
 
-def encode_image(input_image_fn, encode_params):
-    image_encoder = ImageEncoder(encode_params)
-    image_encoder.set_target_image(input_image_fn)
-    image_encoder.encode_image()
+def encode_images(images_dir, e_params):
+    # prepare variables
+    save_every = 100
+    truncation_psi = 0.5 if e_params['is_on_w'] else None
 
-    result_fn = os.path.join(image_encoder.output_dir,
-                             image_encoder.output_template_npy.format(image_encoder.output_name_prefix))
-    return result_fn
+    # prepare result dir
+    if not os.path.exists(e_params['output_dir']):
+        os.makedirs(e_params['output_dir'])
 
-
-def batch_encode_images(input_images_dir, encode_params):
-    target_images = glob.glob(os.path.join(input_images_dir, '*.png'))
+    # prepare target images
+    target_images = glob.glob(os.path.join(images_dir, '*.jpg'))
+    target_images += glob.glob(os.path.join(images_dir, '*.png'))
     target_images = sorted(target_images)
-    # target_images = target_images[:3]
+    target_images = target_images[:1]
 
-    image_encoder = ImageEncoder(encode_params)
-    for input_image_fn in target_images:
-        t_start = time.time()
-        image_encoder.set_target_image(input_image_fn)
-        image_encoder.encode_image()
-        elapsed = time.time() - t_start
-        print('Elapsed: {:.3f}s'.format(elapsed))
+    # sample initial starting point
+    initial_x = sample_initial_w(e_params['stylegan2_ckpt_dir'], e_params['is_on_w'])
+
+    if e_params['results_on_tensorboard']:
+        summary_writer = tf.summary.create_file_writer(e_params['output_dir'])
+    else:
+        summary_writer = None
+
+    # prepare models
+    synthesis = create_synthesis_from_trained_generator(e_params['stylegan2_ckpt_dir'], truncation_psi)
+    lpips = load_lpips(e_params['lpips_ckpt_dir'], e_params['image_size'])
+
+    # start encode images
+    for image_fn in target_images:
+        encode(image_fn, synthesis, lpips, initial_x, e_params, save_every, summary_writer)
     return
 
 
@@ -265,36 +165,34 @@ def main():
     # global program arguments parser
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--allow_memory_growth', type=str_to_bool, nargs='?', const=True, default=True)
-    parser.add_argument('--input_images_dir', default='/home/mookyung/Downloads/labeledAll', type=str)
-    parser.add_argument('--generator_ckpt_dir', default='./stylegan2/official-converted', type=str)
+    parser.add_argument('--images_dir', default='/home/mookyung/Downloads/labeledAll', type=str)
+    parser.add_argument('--stylegan2_ckpt_dir', default='./stylegan2_ref/official-converted', type=str)
     parser.add_argument('--lpips_ckpt_dir', default='./lpips', type=str)
     parser.add_argument('--output_base_dir', default='./outputs', type=str)
-    parser.add_argument('--is_on_w', type=str_to_bool, nargs='?', const=True, default=True)
+    parser.add_argument('--is_on_w', type=str_to_bool, nargs='?', const=True, default=False)
     parser.add_argument('--results_on_tensorboard', type=str_to_bool, nargs='?', const=True, default=True)
     args = vars(parser.parse_args())
 
     if args['allow_memory_growth']:
         allow_memory_growth()
 
-    input_images_dir = args['input_images_dir']
-    generator_ckpt_dir = args['generator_ckpt_dir']
-    lpips_ckpt_dir = args['lpips_ckpt_dir']
-    output_base_dir = args['output_base_dir']
-    is_on_w = args['is_on_w']
-    results_on_tensorboard = args['results_on_tensorboard']
+    if args['is_on_w']:
+        output_dir = os.path.join(args['output_base_dir'], 'w')
+    else:
+        output_dir = os.path.join(args['output_base_dir'], 'w_plus')
 
     encode_params = {
-        'is_on_w': is_on_w,
+        'is_on_w': args['is_on_w'],
         'image_size': 256,
         'learning_rate': 0.01,
         'n_train_step': 1000,
-        'generator_ckpt_dir': generator_ckpt_dir,
-        'lpips_ckpt_dir': lpips_ckpt_dir,
-        'output_dir': output_base_dir,
-        'results_on_tensorboard': results_on_tensorboard,
+        'stylegan2_ckpt_dir': args['stylegan2_ckpt_dir'],
+        'lpips_ckpt_dir': args['lpips_ckpt_dir'],
+        'output_dir': output_dir,
+        'results_on_tensorboard': args['results_on_tensorboard'],
     }
 
-    batch_encode_images(input_images_dir, encode_params)
+    encode_images(args['images_dir'], encode_params)
     return
 
 
